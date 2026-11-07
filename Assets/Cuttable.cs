@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Unity.VisualScripting;
 using UnityEditor;
 using UnityEngine;
 using static Utils.MathUtils;
@@ -106,57 +107,78 @@ public class Cuttable : MonoBehaviour
         return e1 * v.x + e2 * v.y + origin;
     }
 
-    private Triangulation.LineSegmentNode[] parseLineSegments(in Dictionary<(int, int), (int, int)[]> dict, in Dictionary<(int, int), Vector3> registry, Quaternion basis, Vector3 origin)
+    // Given a dictionary and registry of int pairs that represent line segments, return a single loop contained in the dictionary as a looped linked list in the plane's subspace
+    private Triangulation.LineSegmentNode[] parseLoop(in Dictionary<(int, int), (int, int)[]> dict, in Dictionary<(int, int), Vector3> registry, in HashSet<(int, int)> visited, Quaternion basis, Vector3 origin, (int, int) start, in int MAX_ITERATIONS)
     {
         Vector3 e1 = basis * Vector3.right;
         Vector3 e2 = basis * Vector3.up;
-        List<Triangulation.LineSegmentNode> segments = new List<Triangulation.LineSegmentNode>();
 
-        const int MAX_ITERATIONS = 1000;
+        List<Triangulation.LineSegmentNode> loop = new();
 
-        (int, int) first = dict.Keys.First();
-        (int, int) last = first;
-        (int, int) cur = dict[last][0];
         int index = 0;
         int iter = 0;
-        do
+        (int, int) last = start;
+        (int, int) cur = dict[last][0];
+        while (cur != start && iter < MAX_ITERATIONS)
         {
+            visited.Add(cur);
             if (dict[cur][0] == last)
             {
-                segments.Add(new Triangulation.LineSegmentNode(){start = registry[cur], end = registry[dict[cur][1]], next = index + 1});
+                Vector3 projectedStart = ProjectDown(registry[cur], origin, e1, e2);
+                Vector3 projectedEnd = ProjectDown(registry[dict[cur][1]], origin, e1, e2);
+                loop.Add(new Triangulation.LineSegmentNode(){start = projectedStart, end = projectedEnd, next = index + 1});
                 last = cur;
                 cur = dict[cur][1];
             }
             else
             {
-                segments.Add(new Triangulation.LineSegmentNode(){start = registry[cur], end = registry[dict[cur][0]], next = index + 1});
+                Vector3 projectedStart = ProjectDown(registry[cur], origin, e1, e2);
+                Vector3 projectedEnd = ProjectDown(registry[dict[cur][0]], origin, e1, e2);
+                loop.Add(new Triangulation.LineSegmentNode(){start = projectedStart, end = projectedEnd, next = index + 1});
                 last = cur;
                 cur = dict[cur][0];
             }
             index++;
             iter++;
-            if (iter == MAX_ITERATIONS)
-            {
-                Debug.LogWarning("Max iterations reached on line segment generation");
-            }
         }
-        while (cur != first && iter < MAX_ITERATIONS);
-
-        // Connect loop
+        if (iter == MAX_ITERATIONS) Debug.LogWarning("Max iterations reached on line segment generation");
+        // Close the loop
+        visited.Add(cur);
         if (dict[cur][0] == last)
         {
-            segments.Add(new Triangulation.LineSegmentNode(){start = registry[cur], end = registry[dict[cur][1]], next = 0});
+            Vector3 projectedStart = ProjectDown(registry[cur], origin, e1, e2);
+            Vector3 projectedEnd = ProjectDown(registry[dict[cur][1]], origin, e1, e2);
+            loop.Add(new Triangulation.LineSegmentNode(){start = projectedStart, end = projectedEnd, next = 0});
         }
         else
         {
-            segments.Add(new Triangulation.LineSegmentNode(){start = registry[cur], end = registry[dict[cur][0]], next = 0});
+            Vector3 projectedStart = ProjectDown(registry[cur], origin, e1, e2);
+            Vector3 projectedEnd = ProjectDown(registry[dict[cur][0]], origin, e1, e2);
+            loop.Add(new Triangulation.LineSegmentNode(){start = projectedStart, end = projectedEnd, next = 0});
         }
 
-        segments = segments.Select(
-            s => new Triangulation.LineSegmentNode(){start = ProjectDown(s.start, origin, e1, e2), end = ProjectDown(s.end, origin, e1, e2), next = s.next}
-        ).ToList();
+        print(loop.Count);
+        return loop.ToArray();
+    }
 
-        return segments.ToArray();
+    private List<Triangulation.LineSegmentNode[]> parseLineSegments(in Dictionary<(int, int), (int, int)[]> dict, in Dictionary<(int, int), Vector3> registry, Quaternion basis, Vector3 origin)
+    {
+
+        List<Triangulation.LineSegmentNode[]> loops = new();
+        HashSet<(int, int)> visited = new();
+
+        // List<Triangulation.LineSegmentNode> segments = new List<Triangulation.LineSegmentNode>();
+
+        const int MAX_ITERATIONS = 2000;
+
+        var keys = dict.Keys.ToArray();
+
+        (int, int) first = dict.Keys.First();
+        
+
+        loops.Add(parseLoop(dict, registry, visited, basis, origin, first, MAX_ITERATIONS));
+
+        return loops;
     }
 
     public void Cut(Vector3 origin, Vector3 normal, Vector3 e1)
@@ -275,7 +297,7 @@ public class Cuttable : MonoBehaviour
         if (unsortedLineSegmentPairs.Count != 0)
         {
             Quaternion basis = Quaternion.LookRotation(normal, Vector3.Cross(normal, e1));
-            Triangulation.LineSegmentNode[] lineSegments = parseLineSegments(unsortedLineSegmentPairs, intersectionPoints, basis, origin);
+            Triangulation.LineSegmentNode[] lineSegments = parseLineSegments(unsortedLineSegmentPairs, intersectionPoints, basis, origin)[0];
             List<Vector3> cap = Triangulation.Triangulate(lineSegments, 100, 0.001f);
 
             cap = cap.Select(
