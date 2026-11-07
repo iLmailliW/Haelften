@@ -10,6 +10,8 @@ public class Cuttable : MonoBehaviour
     private MeshFilter meshFilter;
 
     public Transform plane;
+    public float EPSILON;
+    public int TRIANGULATION_MAX_ITERATIONS;
 
     void Start()
     {
@@ -157,7 +159,6 @@ public class Cuttable : MonoBehaviour
             loop.Add(new Triangulation.LineSegmentNode(){start = projectedStart, end = projectedEnd, next = 0});
         }
 
-        print(loop.Count);
         return loop.ToArray();
     }
 
@@ -171,12 +172,17 @@ public class Cuttable : MonoBehaviour
 
         const int MAX_ITERATIONS = 2000;
 
-        var keys = dict.Keys.ToArray();
+        var keys = dict.Keys;
 
-        (int, int) first = dict.Keys.First();
+        // (int, int) first = dict.Keys.First();
         
-
-        loops.Add(parseLoop(dict, registry, visited, basis, origin, first, MAX_ITERATIONS));
+        foreach ((int, int) key in keys)
+        {
+            if (!visited.Contains(key))
+            {
+                loops.Add(parseLoop(dict, registry, visited, basis, origin, key, MAX_ITERATIONS));
+            }
+        }
 
         return loops;
     }
@@ -297,24 +303,29 @@ public class Cuttable : MonoBehaviour
         if (unsortedLineSegmentPairs.Count != 0)
         {
             Quaternion basis = Quaternion.LookRotation(normal, Vector3.Cross(normal, e1));
-            Triangulation.LineSegmentNode[] lineSegments = parseLineSegments(unsortedLineSegmentPairs, intersectionPoints, basis, origin)[0];
-            List<Vector3> cap = Triangulation.Triangulate(lineSegments, 100, 0.001f);
-
-            cap = cap.Select(
-                v => ProjectUp(v, origin, basis * Vector3.right, basis * Vector3.up)
-            ).ToList();
-
-            posTriangles.AddRange(cap);
-            posNormals.AddRange(Enumerable.Repeat(-normal, cap.Count));
-
-            for (int i = 0; i < cap.Count / 3; i++) // Reverse the winding for the other cap
+            List<Triangulation.LineSegmentNode[]> loops = parseLineSegments(unsortedLineSegmentPairs, intersectionPoints, basis, origin);
+            for (int i = 0; i < loops.Count; i++)
             {
-                Vector3 temp = cap[3 * i];
-                cap[3 * i] = cap[3 * i + 1];
-                cap[3 * i + 1] = temp;
+                List<Vector3> cap = Triangulation.Triangulate(loops[i], TRIANGULATION_MAX_ITERATIONS, EPSILON);
+                cap = cap.Select(
+                    v => ProjectUp(v, origin, basis * Vector3.right, basis * Vector3.up)
+                ).ToList();
+
+                posTriangles.AddRange(cap);
+                posNormals.AddRange(Enumerable.Repeat(-normal, cap.Count));
+
+                for (int j = 0; j < cap.Count / 3; j++) // Reverse the winding for the other cap
+                {
+                    Vector3 temp = cap[3 * j];
+                    cap[3 * j] = cap[3 * j + 1];
+                    cap[3 * j + 1] = temp;
+                }
+                negTriangles.AddRange(cap);
+                negNormals.AddRange(Enumerable.Repeat(normal, cap.Count));
+                
             }
-            negTriangles.AddRange(cap);
-            negNormals.AddRange(Enumerable.Repeat(normal, cap.Count));
+
+            
         }
 
         InstantiateSubmesh(posTriangles, posNormals, "Pos", Color.green);
